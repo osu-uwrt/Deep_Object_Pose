@@ -1101,7 +1101,7 @@ parser.add_argument('--object',
 
 parser.add_argument('--workers', 
     type=int, 
-    default=8,
+    default=12,
     help='number of data loading workers')
 
 parser.add_argument('--batchsize', 
@@ -1227,16 +1227,6 @@ random.seed(opt.manualseed)
 torch.manual_seed(opt.manualseed)
 torch.cuda.manual_seed_all(opt.manualseed)
 
-os.environ['MASTER_ADDR'] = '192.168.1.133'              
-os.environ['MASTER_PORT'] = '8888'   
-
-dist.init_process_group(                                   
-    	backend='nccl',                                         
-   		init_method='env://',                                   
-    	world_size=opt.nodes,                              
-    	rank=opt.nr                                          
-    )     
-
 # save 
 if not opt.save:
     contrast = 0.2
@@ -1276,18 +1266,11 @@ if not opt.data == "":
             ]),
         )
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
-    	train_dataset,
-    	num_replicas=opt.nodes,
-    	rank=opt.nr
-    )
-
     trainingdata = torch.utils.data.DataLoader(train_dataset,
         batch_size = opt.batchsize, 
-        shuffle = False,
-        num_workers = 0, 
-        pin_memory = True,
-        sampler=train_sampler
+        shuffle = True,
+        num_workers = opt.workers, 
+        pin_memory = True
         )
 
 if opt.save:
@@ -1319,19 +1302,12 @@ if not opt.datatest == "":
                 ]),
             )
 
-    test_sampler = torch.utils.data.distributed.DistributedSampler(
-    	test_dataset,
-    	num_replicas=opt.nodes,
-    	rank=opt.nr
-    )
-
     testingdata = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size = 5, 
-        shuffle = False,
-        num_workers = 0, 
-        pin_memory = True,
-        sampler=test_sampler)
+        batch_size = opt.batchsize // 2, 
+        shuffle = True,
+        num_workers = opt.workers, 
+        pin_memory = True)
 
 if not trainingdata is None:
     print('training data: {} batches'.format(len(trainingdata)))
@@ -1340,7 +1316,6 @@ if not testingdata is None:
 print('load models')
 
 net = DopeNetwork(pretrained=opt.pretrained).cuda()
-net = torch.nn.parallel.DistributedDataParallel(net, opt.gpuids).cuda()
 # net = torch.nn.DataParallel(net,device_ids=opt.gpuids).cuda()
 
 if opt.net != '':
