@@ -63,6 +63,7 @@ from torch.autograd import Variable
 import torch.utils.data as data
 import torchvision.models as models
 from torch.cuda import amp
+import torch.distributed as dist
 import datetime
 import json
 import glob
@@ -1177,6 +1178,13 @@ parser.add_argument('--datasize',
     default=None, 
     help='randomly sample that number of entries in the dataset folder') 
 
+parser.add_argument('-n', '--nodes', default=1,
+                        type=int, metavar='N')
+parser.add_argument('-g', '--gpus', default=1, type=int,
+                    help='number of gpus per node')
+parser.add_argument('-nr', '--nr', default=0, type=int,
+                    help='ranking within the nodes')
+
 # Read the config but do not overwrite the args written 
 args, remaining_argv = conf_parser.parse_known_args()
 defaults = { "option":"default" }
@@ -1219,6 +1227,16 @@ random.seed(opt.manualseed)
 torch.manual_seed(opt.manualseed)
 torch.cuda.manual_seed_all(opt.manualseed)
 
+os.environ['MASTER_ADDR'] = '192.168.1.133'              
+os.environ['MASTER_PORT'] = '8888'   
+
+dist.init_process_group(                                   
+    	backend='nccl',                                         
+   		init_method='env://',                                   
+    	world_size=opt.nodes,                              
+    	rank=opt.nr                                          
+    )     
+
 # save 
 if not opt.save:
     contrast = 0.2
@@ -1257,11 +1275,19 @@ if not opt.data == "":
                                transforms.Scale(opt.imagesize//8),
             ]),
         )
+
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+    	train_dataset,
+    	num_replicas=opt.nodes,
+    	rank=opt.nr
+    )
+
     trainingdata = torch.utils.data.DataLoader(train_dataset,
         batch_size = opt.batchsize, 
-        shuffle = True,
-        num_workers = opt.workers, 
-        pin_memory = True
+        shuffle = False,
+        num_workers = 0, 
+        pin_memory = True,
+        sampler=train_sampler
         )
 
 if opt.save:
@@ -1278,8 +1304,7 @@ if opt.save:
 
 testingdata = None
 if not opt.datatest == "": 
-    testingdata = torch.utils.data.DataLoader(
-        MultipleVertexJson(
+    test_dataset = MultipleVertexJson(
             root = opt.datatest,
             objectsofinterest=opt.object,
             keep_orientation = True,
@@ -1292,11 +1317,21 @@ if not opt.datatest == "":
             target_transform = transforms.Compose([
                                    transforms.Scale(opt.imagesize//8),
                 ]),
-            ),
+            )
+
+    test_sampler = torch.utils.data.distributed.DistributedSampler(
+    	test_dataset,
+    	num_replicas=opt.nodes,
+    	rank=opt.nr
+    )
+
+    testingdata = torch.utils.data.DataLoader(
+        test_dataset,
         batch_size = 5, 
-        shuffle = True,
-        num_workers = opt.workers, 
-        pin_memory = True)
+        shuffle = False,
+        num_workers = 0, 
+        pin_memory = True,
+        sampler=test_sampler)
 
 if not trainingdata is None:
     print('training data: {} batches'.format(len(trainingdata)))
@@ -1305,7 +1340,8 @@ if not testingdata is None:
 print('load models')
 
 net = DopeNetwork(pretrained=opt.pretrained).cuda()
-net = torch.nn.DataParallel(net,device_ids=opt.gpuids).cuda()
+net = torch.nn.parallel.DistributedDataParallel(net, opt.gpuids).cuda()
+# net = torch.nn.DataParallel(net,device_ids=opt.gpuids).cuda()
 
 if opt.net != '':
     net.load_state_dict(torch.load(opt.net))
