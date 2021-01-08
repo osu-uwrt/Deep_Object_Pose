@@ -49,7 +49,7 @@ after each epoch. It will use the 8 gpus using pytorch data parallel.
 
 
 import argparse
-import ConfigParser
+import configparser
 import random
 import numpy as np
 
@@ -62,6 +62,7 @@ import torchvision.transforms as transforms
 from torch.autograd import Variable
 import torch.utils.data as data
 import torchvision.models as models
+from torch.cuda import amp
 import datetime
 import json
 import glob
@@ -79,6 +80,7 @@ from os.path import exists
 
 import cv2
 import colorsys,math
+from tqdm import tqdm
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -1085,16 +1087,16 @@ conf_parser.add_argument("-c", "--config",
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--data',  
-    default = "", 
+    default = "/mnt/Data/fat/soup_train", 
     help='path to training data')
 
 parser.add_argument('--datatest', 
-    default="", 
+    default="/mnt/Data/fat/soup_test", 
     help='path to data testing set')
 
 parser.add_argument('--object', 
-    default=None, 
-    help='In the dataset which objet of interest')
+    default="soup", 
+    help='In the dataset which object of interest')
 
 parser.add_argument('--workers', 
     type=int, 
@@ -1103,7 +1105,7 @@ parser.add_argument('--workers',
 
 parser.add_argument('--batchsize', 
     type=int, 
-    default=32, 
+    default=16, 
     help='input batch size')
 
 parser.add_argument('--imagesize', 
@@ -1113,8 +1115,8 @@ parser.add_argument('--imagesize',
 
 parser.add_argument('--lr', 
     type=float, 
-    default=0.0001, 
-    help='learning rate, default=0.001')
+    default=0.0001,
+    help='learning rate, default=0.0001')
 
 parser.add_argument('--noise', 
     type=float, 
@@ -1135,7 +1137,7 @@ parser.add_argument('--manualseed',
 
 parser.add_argument('--epochs', 
     type=int, 
-    default=60,
+    default=500,
     help="number of epochs to train")
 
 parser.add_argument('--loginterval', 
@@ -1149,7 +1151,7 @@ parser.add_argument('--gpuids',
     help='GPUs to use')
 
 parser.add_argument('--outf', 
-    default='tmp', 
+    default='soup_without_negatives_right', 
     help='folder to output images and model checkpoints, it will \
     add a train_ in front of the name')
 
@@ -1180,7 +1182,7 @@ args, remaining_argv = conf_parser.parse_known_args()
 defaults = { "option":"default" }
 
 if args.config:
-    config = ConfigParser.SafeConfigParser()
+    config = configparser.SafeConfigParser()
     config.read([args.config])
     defaults.update(dict(config.items("defaults")))
 
@@ -1291,7 +1293,7 @@ if not opt.datatest == "":
                                    transforms.Scale(opt.imagesize//8),
                 ]),
             ),
-        batch_size = opt.batchsize, 
+        batch_size = 5, 
         shuffle = True,
         num_workers = opt.workers, 
         pin_memory = True)
@@ -1319,7 +1321,7 @@ with open (opt.outf+'/loss_test.csv','w') as file:
 
 nb_update_network = 0
 
-def _runnetwork(epoch, loader, train=True):
+def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
     global nb_update_network
     # net
     if train:
@@ -1329,33 +1331,41 @@ def _runnetwork(epoch, loader, train=True):
 
     for batch_idx, targets in enumerate(loader):
 
+        if train:
+            if pbar is not None:
+                pbar.set_description("Training (%d/%d)" % (batch_idx, len(loader)))
+            optimizer.zero_grad()
+        else:
+            if pbar is not None:
+                pbar.set_description("Testing (%d/%d)" % (batch_idx, len(loader)))
+
         data = Variable(targets['img'].cuda())
         
-        output_belief, output_affinities = net(data)
-                       
-        if train:
-            optimizer.zero_grad()
-        target_belief = Variable(targets['beliefs'].cuda())        
-        target_affinity = Variable(targets['affinities'].cuda())
+        with amp.autocast():
+            output_belief, output_affinities = net(data)
 
-        loss = None
-        
-        # Belief maps loss
-        for l in output_belief: #output, each belief map layers. 
-            if loss is None:
-                loss = ((l - target_belief) * (l-target_belief)).mean()
-            else:
-                loss_tmp = ((l - target_belief) * (l-target_belief)).mean()
-                loss += loss_tmp
-        
-        # Affinities loss
-        for l in output_affinities: #output, each belief map layers. 
-            loss_tmp = ((l - target_affinity) * (l-target_affinity)).mean()
-            loss += loss_tmp 
+            target_belief = Variable(targets['beliefs'].cuda())        
+            target_affinity = Variable(targets['affinities'].cuda())
+
+            loss = None
+            
+            # Belief maps loss
+            for l in output_belief: #output, each belief map layers. 
+                if loss is None:
+                    loss = ((l - target_belief) * (l-target_belief)).mean()
+                else:
+                    loss_tmp = ((l - target_belief) * (l-target_belief)).mean()
+                    loss += loss_tmp
+            
+            # Affinities loss
+            for l in output_affinities: #output, each belief map layers. 
+                loss_tmp = ((l - target_affinity) * (l-target_affinity)).mean()
+                loss += loss_tmp 
 
         if train:
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             nb_update_network+=1
 
         if train:
@@ -1369,30 +1379,22 @@ def _runnetwork(epoch, loader, train=True):
             # print (s)
             file.write(s)
 
-        if train:
-            if batch_idx % opt.loginterval == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.15f}'.format(
-                    epoch, batch_idx * len(data), len(loader.dataset),
-                    100. * batch_idx / len(loader), loss.data.item()))
-        else:
-            if batch_idx % opt.loginterval == 0:
-                print('Test Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.15f}'.format(
-                    epoch, batch_idx * len(data), len(loader.dataset),
-                    100. * batch_idx / len(loader), loss.data.item()))
-
         # break
         if not opt.nbupdates is None and nb_update_network > int(opt.nbupdates):
             torch.save(net.state_dict(), '{}/net_{}.pth'.format(opt.outf, opt.namefile))
             break
 
+scaler = amp.GradScaler()
 
-for epoch in range(1, opt.epochs + 1):
+pbar = tqdm(range(1, opt.epochs + 1), "Epoch")
+
+for epoch in pbar:
 
     if not trainingdata is None:
-        _runnetwork(epoch,trainingdata)
+        _runnetwork(epoch,trainingdata, scaler=scaler, pbar=pbar)
 
     if not opt.datatest == "":
-        _runnetwork(epoch,testingdata,train = False)
+        _runnetwork(epoch,testingdata, train=False, pbar=pbar)
         if opt.data == "":
             break # lets get out of this if we are only testing
     try:
