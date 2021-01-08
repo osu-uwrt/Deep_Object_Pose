@@ -173,6 +173,7 @@ catkin_install_python(PROGRAMS
   nodes/camera
   nodes/dope
   scripts/train.py
+  scripts/test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 ## Mark executables and/or libraries for installation
