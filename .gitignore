@@ -5,4 +5,5 @@
 __pycache__
 venv
 .idea
-scripts/**/*
+scripts/**/*.csv
+scripts/**/*.pth

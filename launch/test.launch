@@ -3,7 +3,7 @@
 
   
     <group ns="puddles">
-        <node name="dope" pkg="dope" type="dope" output="screen" clear_params="true">
+        <node name="test" pkg="dope" type="test.py" output="screen" clear_params="true">
             <rosparam file="$(arg config)"/>
         </node>
     </group>
