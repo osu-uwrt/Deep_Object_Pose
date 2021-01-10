@@ -78,6 +78,7 @@ from math import sqrt
 from math import pi    
 
 from os.path import exists
+from shutil import copytree
 
 import cv2
 import colorsys,math
@@ -1106,7 +1107,7 @@ parser.add_argument('--workers',
 
 parser.add_argument('--batchsize', 
     type=int, 
-    default=16, 
+    default=24, 
     help='input batch size')
 
 parser.add_argument('--imagesize', 
@@ -1202,7 +1203,7 @@ if opt.pretrained in ['false', 'False']:
 	opt.pretrained = False
 
 if not "/" in opt.outf:
-    opt.outf = "train_{}".format(opt.outf)
+    opt.outf = "/mnt/Data/DOPE_trainings/train_{}".format(opt.outf)
 
 try:
     os.makedirs(opt.outf)
@@ -1247,12 +1248,16 @@ else:
                            transforms.Resize(opt.imagesize),
                            transforms.ToTensor()])
 
-print ("load data")
+temp_train_path = os.path.expanduser("~/DOPE_train_data")
+temp_test_path = os.path.expanduser("~/DOPE_test_data")
+
+print ("loading data to SSD")
 #load the dataset using the loader in utils_pose
 trainingdata = None
 if not opt.data == "":
+    os.system("cp -Lr %s %s" % (opt.data, temp_train_path))
     train_dataset = MultipleVertexJson(
-        root = opt.data,
+        root = temp_train_path,
         objectsofinterest=opt.object,
         keep_orientation = True,
         noise = opt.noise,
@@ -1287,8 +1292,9 @@ if opt.save:
 
 testingdata = None
 if not opt.datatest == "": 
+    os.system("cp -Lr %s %s" % (opt.datatest, temp_test_path))
     test_dataset = MultipleVertexJson(
-            root = opt.datatest,
+            root = temp_test_path,
             objectsofinterest=opt.object,
             keep_orientation = True,
             noise = opt.noise,
@@ -1397,7 +1403,7 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
 
 scaler = amp.GradScaler()
 
-pbar = tqdm(range(1, opt.epochs + 1), "Epoch")
+pbar = tqdm(range(1, opt.epochs + 1))
 
 for epoch in pbar:
 
