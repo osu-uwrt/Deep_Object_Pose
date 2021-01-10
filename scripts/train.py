@@ -47,6 +47,12 @@ This will create a folder called `train_soup` where the weights will be saved
 after each epoch. It will use the 8 gpus using pytorch data parallel. 
 """
 
+import sys
+
+if sys.version_info.major != 2:
+    print("Please rin in python 2 so the model can be used by ROS")
+    exit()
+
 
 import argparse
 import configparser
