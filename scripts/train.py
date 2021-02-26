@@ -47,13 +47,6 @@ This will create a folder called `train_soup` where the weights will be saved
 after each epoch. It will use the 8 gpus using pytorch data parallel. 
 """
 
-import sys
-
-if sys.version_info.major != 2:
-    print("Please rin in python 2 so the model can be used by ROS")
-    exit()
-
-
 import argparse
 import configparser
 import random
@@ -490,19 +483,6 @@ class MultipleVertexJson(data.Dataset):
         matrix_camera[1,2] = cam['cy']
         matrix_camera[2,2] = 1
 
-        # Load the cuboid sizes
-        path_set = path.replace(name,'_object_settings.json')
-        with open(path_set) as data_file:    
-            data = json.load(data_file)
-
-        cuboid = torch.zeros(1)
-
-        if self.objectsofinterest is None:
-            cuboid = np.array(data['exported_objects'][0]['cuboid_dimensions'])
-        else:
-            for info in data["exported_objects"]:
-                if self.objectsofinterest in info['class']:
-                    cuboid = np.array(info['cuboid_dimensions'])
 
         img_original = img.copy()        
 
@@ -625,7 +605,6 @@ class MultipleVertexJson(data.Dataset):
                 'pointsBelief':np.array(points_all[0]),
                 'matrix_camera':matrix_camera,
                 'img_original': np.array(img_original),
-                'cuboid': cuboid,
                 'file_name':name,
             }
 
@@ -1095,15 +1074,15 @@ conf_parser.add_argument("-c", "--config",
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--data',  
-    default = "/mnt/Data/fat/soup_train", 
+    default = "/mnt/Data/visii_data/path", 
     help='path to training data')
 
 parser.add_argument('--datatest', 
-    default="/mnt/Data/fat/soup_test", 
+    default="", 
     help='path to data testing set')
 
 parser.add_argument('--object', 
-    default="soup", 
+    default="path", 
     help='In the dataset which object of interest')
 
 parser.add_argument('--workers', 
@@ -1112,6 +1091,11 @@ parser.add_argument('--workers',
     help='number of data loading workers')
 
 parser.add_argument('--batchsize', 
+    type=int, 
+    default=128, 
+    help='input batch size')
+
+parser.add_argument('--subbatchsize', 
     type=int, 
     default=24, 
     help='input batch size')
@@ -1145,7 +1129,7 @@ parser.add_argument('--manualseed',
 
 parser.add_argument('--epochs', 
     type=int, 
-    default=500,
+    default=60,
     help="number of epochs to train")
 
 parser.add_argument('--loginterval', 
@@ -1159,7 +1143,7 @@ parser.add_argument('--gpuids',
     help='GPUs to use')
 
 parser.add_argument('--outf', 
-    default='soup_without_negatives_right', 
+    default='path_amp_mini', 
     help='folder to output images and model checkpoints, it will \
     add a train_ in front of the name')
 
@@ -1254,16 +1238,12 @@ else:
                            transforms.Resize(opt.imagesize),
                            transforms.ToTensor()])
 
-temp_train_path = os.path.expanduser("~/DOPE_train_data")
-temp_test_path = os.path.expanduser("~/DOPE_test_data")
 
-print ("loading data to SSD")
 #load the dataset using the loader in utils_pose
 trainingdata = None
 if not opt.data == "":
-    os.system("cp -Lr %s %s" % (opt.data, temp_train_path))
     train_dataset = MultipleVertexJson(
-        root = temp_train_path,
+        root = opt.data,
         objectsofinterest=opt.object,
         keep_orientation = True,
         noise = opt.noise,
@@ -1278,7 +1258,7 @@ if not opt.data == "":
         )
 
     trainingdata = torch.utils.data.DataLoader(train_dataset,
-        batch_size = opt.batchsize, 
+        batch_size = opt.subbatchsize, 
         shuffle = True,
         num_workers = opt.workers, 
         pin_memory = True
@@ -1298,9 +1278,8 @@ if opt.save:
 
 testingdata = None
 if not opt.datatest == "": 
-    os.system("cp -Lr %s %s" % (opt.datatest, temp_test_path))
     test_dataset = MultipleVertexJson(
-            root = temp_test_path,
+            root = opt.data,
             objectsofinterest=opt.object,
             keep_orientation = True,
             noise = opt.noise,
@@ -1316,7 +1295,7 @@ if not opt.datatest == "":
 
     testingdata = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size = opt.batchsize // 2, 
+        batch_size = opt.subbatchsize // 2, 
         shuffle = True,
         num_workers = opt.workers, 
         pin_memory = True)
@@ -1352,12 +1331,13 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
     else:
         net.eval()
 
+    if train:
+        optimizer.zero_grad()
     for batch_idx, targets in enumerate(loader):
 
         if train:
             if pbar is not None:
                 pbar.set_description("Training (%d/%d)" % (batch_idx, len(loader)))
-            optimizer.zero_grad()
         else:
             if pbar is not None:
                 pbar.set_description("Testing (%d/%d)" % (batch_idx, len(loader)))
@@ -1387,9 +1367,12 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
 
         if train:
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            nb_update_network+=1
+            if batch_idx % (opt.batchsize // opt.subbatchsize) == 0:
+                if train:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    nb_update_network+=1
+                    optimizer.zero_grad()
 
         if train:
             namefile = '/loss_train.csv'
@@ -1406,6 +1389,8 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
         if not opt.nbupdates is None and nb_update_network > int(opt.nbupdates):
             torch.save(net.state_dict(), '{}/net_{}.pth'.format(opt.outf, opt.namefile))
             break
+    if train:
+        optimizer.zero_grad()
 
 scaler = amp.GradScaler()
 

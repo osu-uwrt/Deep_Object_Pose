@@ -4,9 +4,9 @@ import sys
 sys.path.append(".")
 
 import cv2
-from src.dope.inference.cuboid import Cuboid3d
-from src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
-from src.dope.inference.detector import ModelData, ObjectDetector
+from Deep_Object_Pose.src.dope.inference.cuboid import Cuboid3d
+from Deep_Object_Pose.src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
+from Deep_Object_Pose.src.dope.inference.detector import ModelData, ObjectDetector
 import numpy as np
 
 
@@ -30,7 +30,7 @@ def main():
         # "gelatin":"package://dope/weights/gelatin_60.pth",
         # "meat":"package://dope/weights/meat_20.pth",
         # "mustard":"package://dope/weights/mustard_60.pth",
-        "soup":"package://dope/weights/soup_60.pth",
+        "soup":"/mnt/Data/DOPE_trainings/train_soup_without_negatives_right_try_2/net_epoch_196.pth",
         #"sugar":"package://dope/weights/sugar_60.pth",
         # "bleach":"package://dope/weights/bleach_28_dr.pth"
         
@@ -123,9 +123,9 @@ def main():
                 cuboid3d=Cuboid3d(dimensions[model])
             )
 
-        camera_matrix = np.array([[205.2789348,    0,         355.83333333],
-                    [  0,         205.2789348,  200.27777778],
-                    [  0,           0.,           1.        ]])
+        camera_matrix = np.array([[768.16058349609375 * 200 / 270,    0,         355.83333333],
+                                [  0,         768.16058349609375 * 200 / 270,  200.27777778],
+                                [  0,           0.,           1.        ]])
         dist_coeffs = np.array([[0.],
                         [0.],
                         [0.],
@@ -137,7 +137,7 @@ def main():
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
-    pathToImg = "/home/blaine/Pictures/net_soup.png"
+    pathToImg = "/home/uwrt/DOPE_train_data/data_mixed_kitchen_0_000059.left.jpg"
     print("path to the image is: {}".format(pathToImg))
     img = cv2.imread(pathToImg)
     cv2.imshow('img', img)

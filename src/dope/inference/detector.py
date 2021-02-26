@@ -26,7 +26,7 @@ transform = transforms.Compose([
     # transforms.Scale(IMAGE_SIZE),
     # transforms.CenterCrop((imagesize,imagesize)),
     transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    transforms.Normalize((0.59, 0.59, 0.59), (0.25, 0.25, 0.25)),
     ])
 
 
@@ -222,7 +222,7 @@ class ModelData(object):
         model_loading_start_time = time.time()
         print("Loading DOPE model '{}'...".format(path))
         net = DopeNetwork()
-        net = torch.nn.DataParallel(net, [0]).cuda()
+        net = net.cuda()
         net.load_state_dict(torch.load(path))
         net.eval()
         print('    Model loaded in {} seconds.'.format(
@@ -251,9 +251,6 @@ class ObjectDetector(object):
         out, seg = net_model(image_torch)
         vertex2 = out[-1][0]
         aff = seg[-1][0]
-
-        # Find objects from network output
-        detected_objects = ObjectDetector.find_object_poses(vertex2, aff, pnp_solver, config)
 
         # Find objects from network output
         detected_objects = ObjectDetector.find_object_poses(vertex2, aff, pnp_solver, config
