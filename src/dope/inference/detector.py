@@ -260,7 +260,7 @@ class ObjectDetector(object):
             )
 
         if not grid_belief_debug: 
-            return detected_objects, None
+            return detected_objects
         else:
             # Run the belief maps debug display on the beliefmaps
             upsampling = nn.UpsamplingNearest2d(scale_factor=1)
