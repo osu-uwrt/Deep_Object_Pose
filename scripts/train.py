@@ -1074,15 +1074,15 @@ conf_parser.add_argument("-c", "--config",
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--data',  
-    default = "/mnt/Data/visii_data/path", 
+    default = "/mnt/Data/visii_data/cutie/cutie_training", 
     help='path to training data')
 
 parser.add_argument('--datatest', 
-    default="", 
+    default="/mnt/Data/visii_data/cutie/cutie_test", 
     help='path to data testing set')
 
 parser.add_argument('--object', 
-    default="path", 
+    default="cutie", 
     help='In the dataset which object of interest')
 
 parser.add_argument('--workers', 
@@ -1120,7 +1120,7 @@ parser.add_argument('--net',
     help="path to net (to continue training)")
 
 parser.add_argument('--namefile', 
-    default='epoch', 
+    default='cutie', 
     help="name to put on the file of the save weights")
 
 parser.add_argument('--manualseed', 
@@ -1143,7 +1143,7 @@ parser.add_argument('--gpuids',
     help='GPUs to use')
 
 parser.add_argument('--outf', 
-    default='path_amp_mini', 
+    default='cutie', 
     help='folder to output images and model checkpoints, it will \
     add a train_ in front of the name')
 
@@ -1279,7 +1279,7 @@ if opt.save:
 testingdata = None
 if not opt.datatest == "": 
     test_dataset = MultipleVertexJson(
-            root = opt.data,
+            root = opt.datatest,
             objectsofinterest=opt.object,
             keep_orientation = True,
             noise = opt.noise,
@@ -1335,13 +1335,6 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
         optimizer.zero_grad()
     for batch_idx, targets in enumerate(loader):
 
-        if train:
-            if pbar is not None:
-                pbar.set_description("Training (%d/%d)" % (batch_idx, len(loader)))
-        else:
-            if pbar is not None:
-                pbar.set_description("Testing (%d/%d)" % (batch_idx, len(loader)))
-
         data = Variable(targets['img'].cuda())
         
         with amp.autocast():
@@ -1389,6 +1382,13 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
         if not opt.nbupdates is None and nb_update_network > int(opt.nbupdates):
             torch.save(net.state_dict(), '{}/net_{}.pth'.format(opt.outf, opt.namefile))
             break
+
+        if train:
+            if pbar is not None:
+                pbar.set_description("Training loss: %0.4f (%d/%d)" % (loss.data.item(), batch_idx, len(loader)))
+        else:
+            if pbar is not None:
+                pbar.set_description("Testing loss: %0.4f (%d/%d)" % (loss.data.item(), batch_idx, len(loader)))
     if train:
         optimizer.zero_grad()
 

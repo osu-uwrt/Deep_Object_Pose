@@ -1,12 +1,12 @@
-#!/usr/bin/env python
+
 
 import sys
 sys.path.append(".")
 
 import cv2
-from Deep_Object_Pose.src.dope.inference.cuboid import Cuboid3d
-from Deep_Object_Pose.src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
-from Deep_Object_Pose.src.dope.inference.detector import ModelData, ObjectDetector
+from src.dope.inference.cuboid import Cuboid3d
+from src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
+from src.dope.inference.detector import ModelData, ObjectDetector
 import numpy as np
 
 
@@ -30,7 +30,7 @@ def main():
         # "gelatin":"package://dope/weights/gelatin_60.pth",
         # "meat":"package://dope/weights/meat_20.pth",
         # "mustard":"package://dope/weights/mustard_60.pth",
-        "soup":"/mnt/Data/DOPE_trainings/train_soup_without_negatives_right_try_2/net_epoch_196.pth",
+        "cutie":"/mnt/Data/DOPE_trainings/train_cutie/net_cutie_60.pth",
         #"sugar":"package://dope/weights/sugar_60.pth",
         # "bleach":"package://dope/weights/bleach_28_dr.pth"
         
@@ -74,6 +74,7 @@ def main():
         "soup": [6.7659378051757813,10.185500144958496,6.771425724029541],
         "sugar": [9.267730712890625,17.625339508056641,4.5134143829345703],
         "bleach": [10.267730712890625,26.625339508056641,7.5134143829345703],
+        "cutie": [100, 200, 1],
 
         # new objects
         "AlphabetSoup" : [ 8.3555002212524414, 7.1121001243591309, 6.6055998802185059 ], 
@@ -123,41 +124,46 @@ def main():
                 cuboid3d=Cuboid3d(dimensions[model])
             )
 
-        camera_matrix = np.array([[768.16058349609375 * 200 / 270,    0,         355.83333333],
-                                [  0,         768.16058349609375 * 200 / 270,  200.27777778],
-                                [  0,           0.,           1.        ]])
+        camera_matrix = np.array([[618,    0,         256.0],
+                                [  0,      618,       256.0],
+                                [  0,      0.,        1.        ]])
         dist_coeffs = np.array([[0.],
                         [0.],
                         [0.],
                         [0.]])
 
-        pnp_solvers[model].set_camera_intrinsic_matrix(camera_matrix)
-        pnp_solvers[model].set_dist_coeffs(dist_coeffs)
+        
 
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
-    pathToImg = "/home/uwrt/DOPE_train_data/data_mixed_kitchen_0_000059.left.jpg"
-    print("path to the image is: {}".format(pathToImg))
-    img = cv2.imread(pathToImg)
-    cv2.imshow('img', img)
-    cv2.waitKey(1)
+    
 
-    height, width, _ = img.shape
-    scaling_factor = float(400) / height
-    if scaling_factor < 1.0:
-        img = cv2.resize(img, (int(scaling_factor * width), int(scaling_factor * height)))
+    for i in range(20):
+        pathToImg = "/mnt/Data/visii_data/cutie/cutie%d.png" % i
+        print("path to the image is: {}".format(pathToImg))
+        img = cv2.imread(pathToImg)
+        cv2.imshow('img', img)
+        cv2.waitKey(1)
 
+        height, width, _ = img.shape
+        scaling_factor = float(400) / height
+        if scaling_factor < 1.0:
+            img = cv2.resize(img, (int(scaling_factor * width), int(scaling_factor * height)))
+            camera_matrix *= scaling_factor
+        
+        pnp_solvers[model].set_camera_intrinsic_matrix(camera_matrix)
+        pnp_solvers[model].set_dist_coeffs(dist_coeffs)
+        
+        for m in models:
+            # try to detect object
+            results, im_belief = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], img, config_detect, grid_belief_debug=True, norm_belief=True, run_sampling=True)
 
-    for m in models:
-        # try to detect object
-        results, im_belief = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], img, config_detect, grid_belief_debug=True, norm_belief=True, run_sampling=True)
-
-        print("objects found: {}".format(results))
-        cv_imageBelief = np.array(im_belief)
-        imageToShow = cv2.resize(cv_imageBelief, dsize=(800, 800))
-        cv2.imshow('beliefMaps', imageToShow)
-        cv2.waitKey(0)      
+            print("objects found: {}".format(results))
+            cv_imageBelief = np.array(im_belief)
+            imageToShow = cv2.resize(cv_imageBelief, dsize=(800, 800))
+            cv2.imshow('beliefMaps', imageToShow)
+            cv2.waitKey(0)      
 
     print("end")
 
