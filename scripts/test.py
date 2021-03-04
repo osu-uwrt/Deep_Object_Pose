@@ -8,9 +8,75 @@ from src.dope.inference.cuboid import Cuboid3d
 from src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
 from src.dope.inference.detector import ModelData, ObjectDetector
 import numpy as np
+import yaml
+from PIL import Image, ImageDraw
+
+class Draw(object):
+    """Drawing helper class to visualize the neural network output"""
+
+    def __init__(self, im):
+        """
+        :param im: The image to draw in.
+        """
+        self.draw = ImageDraw.Draw(im)
+
+    def draw_line(self, point1, point2, line_color, line_width=2):
+        """Draws line on image"""
+        if point1 is not None and point2 is not None:
+            self.draw.line([point1, point2], fill=line_color, width=line_width)
+
+    def draw_dot(self, point, point_color, point_radius):
+        """Draws dot (filled circle) on image"""
+        if point is not None:
+            xy = [
+                point[0] - point_radius,
+                point[1] - point_radius,
+                point[0] + point_radius,
+                point[1] + point_radius
+            ]
+            self.draw.ellipse(xy,
+                              fill=point_color,
+                              outline=point_color
+                              )
+
+    def draw_cube(self, points, color=(255, 0, 0)):
+        """
+        Draws cube with a thick solid line across
+        the front top edge and an X on the top face.
+        """
+
+        # draw front
+        self.draw_line(points[0], points[1], color)
+        self.draw_line(points[1], points[2], color)
+        self.draw_line(points[3], points[2], color)
+        self.draw_line(points[3], points[0], color)
+
+        # draw back
+        self.draw_line(points[4], points[5], color)
+        self.draw_line(points[6], points[5], color)
+        self.draw_line(points[6], points[7], color)
+        self.draw_line(points[4], points[7], color)
+
+        # draw sides
+        self.draw_line(points[0], points[4], color)
+        self.draw_line(points[7], points[3], color)
+        self.draw_line(points[5], points[1], color)
+        self.draw_line(points[2], points[6], color)
+
+        # draw dots
+        self.draw_dot(points[0], point_color=color, point_radius=4)
+        self.draw_dot(points[1], point_color=color, point_radius=4)
+
+        # draw x on the top
+        self.draw_line(points[0], points[5], color)
+        self.draw_line(points[1], points[4], color)
+    
+
 
 
 def main():
+    global last
+
     models = {}
     pnp_solvers = {}
 
@@ -107,6 +173,21 @@ def main():
         "PeasAndCarrots" : [ 5.8512001037597656, 7.0636000633239746, 6.5918002128601074 ] 
     }
 
+    draw_colors = {
+        "cracker": (13, 255, 128),  # green
+        "gelatin": (255, 255, 255),  # while
+        "meat": (0, 104, 255),  # blue
+        "mustard": (217,12, 232),  # magenta
+        "soup": (255, 101, 0),  # orange
+        "sugar": (232, 222, 12),  # yellow
+        "cutie": (232, 222, 12),  # yellow
+    }
+
+    camera_matrix = np.array([[618,    0,         256.0],
+                            [  0,      618,       256.0],
+                            [  0,      0.,        1.        ]])
+    dist_coeffs = np.zeros((4, 1))
+
     # For each object to detect, load network model, create PNP solver, and start ROS publishers
     for model, weights_url in weights.items():
         models[model] = \
@@ -123,49 +204,68 @@ def main():
                 model,
                 cuboid3d=Cuboid3d(dimensions[model])
             )
-
-        camera_matrix = np.array([[618,    0,         256.0],
-                                [  0,      618,       256.0],
-                                [  0,      0.,        1.        ]])
-        dist_coeffs = np.array([[0.],
-                        [0.],
-                        [0.],
-                        [0.]])
-
-        
+       
 
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
+    path_to_video = "/home/uwrt/Videos/All.MOV"
+    out_video = "test.avi"
+    cap = cv2.VideoCapture(path_to_video)
+
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)   # float `width`
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter('output.avi',fourcc, fps, (int(width), int(height)))
+
+    scaling_factor = float(400) / height
+    if scaling_factor < 1.0:
+        camera_matrix *= scaling_factor
     
-
-    for i in range(20):
-        pathToImg = "/mnt/Data/visii_data/cutie/cutie%d.png" % i
-        print("path to the image is: {}".format(pathToImg))
-        img = cv2.imread(pathToImg)
-        cv2.imshow('img', img)
-        cv2.waitKey(1)
-
-        height, width, _ = img.shape
-        scaling_factor = float(400) / height
-        if scaling_factor < 1.0:
-            img = cv2.resize(img, (int(scaling_factor * width), int(scaling_factor * height)))
-            camera_matrix *= scaling_factor
-        
+    for m in models:
+        # Resize camera matrix
         pnp_solvers[model].set_camera_intrinsic_matrix(camera_matrix)
         pnp_solvers[model].set_dist_coeffs(dist_coeffs)
+
+    while(cap.isOpened()):
+        ret, frame = cap.read()
+
+        if not ret:
+            break 
+
+        frame_copy = frame.copy()
+        im = Image.fromarray(frame_copy)
+        draw = Draw(im)
+
+        
+        if scaling_factor < 1.0:
+            frame = cv2.resize(frame, (int(scaling_factor * width), int(scaling_factor * height)))
         
         for m in models:
+            
             # try to detect object
-            results, im_belief = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], img, config_detect, grid_belief_debug=True, norm_belief=True, run_sampling=True)
+            results = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], frame, config_detect)
 
-            print("objects found: {}".format(results))
-            cv_imageBelief = np.array(im_belief)
-            imageToShow = cv2.resize(cv_imageBelief, dsize=(800, 800))
-            cv2.imshow('beliefMaps', imageToShow)
-            cv2.waitKey(0)      
+            
+            for i_r, result in enumerate(results):
+                if None not in result['projected_points']:
+                    points2d = []
+                    for pair in result['projected_points']:
+                        points2d.append(tuple(pair))
+                    draw.draw_cube(points2d, draw_colors[m])
 
-    print("end")
+            annotated_frame = np.array(im)
+            cv2.imshow('frame', annotated_frame)
+            out.write(annotated_frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break    
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
