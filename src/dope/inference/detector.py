@@ -248,9 +248,10 @@ class ObjectDetector(object):
         # Run network inference
         image_tensor = transform(in_img)
         image_torch = Variable(image_tensor).cuda().unsqueeze(0)
-        out, seg = net_model(image_torch)
-        vertex2 = out[-1][0]
-        aff = seg[-1][0]
+        with torch.cuda.amp.autocast():
+            out, seg = net_model(image_torch)
+        vertex2 = out[-1][0].to(torch.float32)
+        aff = seg[-1][0].to(torch.float32)
 
         # Find objects from network output
         detected_objects = ObjectDetector.find_object_poses(vertex2, aff, pnp_solver, config
