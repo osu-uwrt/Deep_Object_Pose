@@ -1,5 +1,3 @@
-
-
 import sys
 sys.path.append(".")
 
@@ -75,7 +73,6 @@ class Draw(object):
 
 
 def main():
-    global last
 
     models = {}
     pnp_solvers = {}
@@ -96,7 +93,7 @@ def main():
         # "gelatin":"package://dope/weights/gelatin_60.pth",
         # "meat":"package://dope/weights/meat_20.pth",
         # "mustard":"package://dope/weights/mustard_60.pth",
-        "cutie":"/mnt/Data/DOPE_trainings/train_cutie/net_cutie_60.pth",
+        "cutie":"/home/blaine/osu-uwrt/riptide_software/src/riptide_vision/weights/net_cutie_60.pth",
         #"sugar":"package://dope/weights/sugar_60.pth",
         # "bleach":"package://dope/weights/bleach_28_dr.pth"
         
@@ -140,7 +137,7 @@ def main():
         "soup": [6.7659378051757813,10.185500144958496,6.771425724029541],
         "sugar": [9.267730712890625,17.625339508056641,4.5134143829345703],
         "bleach": [10.267730712890625,26.625339508056641,7.5134143829345703],
-        "cutie": [100, 200, 1],
+        "cutie": [124.5, 1.2, 62.2],
 
         # new objects
         "AlphabetSoup" : [ 8.3555002212524414, 7.1121001243591309, 6.6055998802185059 ], 
@@ -209,16 +206,13 @@ def main():
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
-    path_to_video = "/home/uwrt/Videos/All.MOV"
+    path_to_video = "/home/blaine/Videos/simplescreenrecorder-2021-03-04_13.49.41.mp4"
     out_video = "test.avi"
     cap = cv2.VideoCapture(path_to_video)
 
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)   # float `width`
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     fps = cap.get(cv2.CAP_PROP_FPS)
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter('output.avi',fourcc, fps, (int(width), int(height)))
 
     scaling_factor = float(400) / height
     if scaling_factor < 1.0:
@@ -229,19 +223,21 @@ def main():
         pnp_solvers[model].set_camera_intrinsic_matrix(camera_matrix)
         pnp_solvers[model].set_dist_coeffs(dist_coeffs)
 
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter(out_video, fourcc, fps, (int(scaling_factor * width), int(scaling_factor * height)))
+
     while(cap.isOpened()):
         ret, frame = cap.read()
 
         if not ret:
             break 
 
+        if scaling_factor < 1.0:
+            frame = cv2.resize(frame, (int(scaling_factor * width), int(scaling_factor * height)))
+
         frame_copy = frame.copy()
         im = Image.fromarray(frame_copy)
         draw = Draw(im)
-
-        
-        if scaling_factor < 1.0:
-            frame = cv2.resize(frame, (int(scaling_factor * width), int(scaling_factor * height)))
         
         for m in models:
             

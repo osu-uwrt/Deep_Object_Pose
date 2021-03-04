@@ -8,4 +8,4 @@ venv
 scripts/**/*.csv
 scripts/**/*.pth
 scripts/**/*.txt
-output.avi
+*.avi
