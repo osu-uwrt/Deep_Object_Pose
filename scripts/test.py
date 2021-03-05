@@ -93,7 +93,7 @@ def main():
         # "gelatin":"package://dope/weights/gelatin_60.pth",
         # "meat":"package://dope/weights/meat_20.pth",
         # "mustard":"package://dope/weights/mustard_60.pth",
-        "cutie":"/home/blaine/osu-uwrt/riptide_software/src/riptide_vision/weights/net_cutie_60.pth",
+        "cutie":"/mnt/Data/DOPE_trainings/train_cutie/net_cutie_60.pth",
         #"sugar":"package://dope/weights/sugar_60.pth",
         # "bleach":"package://dope/weights/bleach_28_dr.pth"
         
@@ -180,8 +180,8 @@ def main():
         "cutie": (232, 222, 12),  # yellow
     }
 
-    camera_matrix = np.array([[618,    0,         256.0],
-                            [  0,      618,       256.0],
+    camera_matrix = np.array([[303,    0,         256.0],
+                            [  0,      303,       256.0],
                             [  0,      0.,        1.        ]])
     dist_coeffs = np.zeros((4, 1))
 
@@ -206,7 +206,7 @@ def main():
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
-    path_to_video = "/home/blaine/Videos/simplescreenrecorder-2021-03-04_13.49.41.mp4"
+    path_to_video = "/home/uwrt/Videos/All.MOV"
     out_video = "test.avi"
     cap = cv2.VideoCapture(path_to_video)
 
