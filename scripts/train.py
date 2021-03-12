@@ -62,7 +62,6 @@ from torch.autograd import Variable
 import torch.utils.data as data
 import torchvision.models as models
 from torch.cuda import amp
-import torch.distributed as dist
 import datetime
 import json
 import glob
@@ -77,11 +76,11 @@ from math import sqrt
 from math import pi    
 
 from os.path import exists
-from shutil import copytree
 
 import cv2
 import colorsys,math
 from tqdm import tqdm
+import time
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -274,11 +273,8 @@ def loadjson(path, objectsofinterest, img):
         data = json.load(data_file)
     # print (path)
     pointsBelief = []
-    boxes = []
-    points_keypoints_3d = []
     points_keypoints_2d = []
     pointsBoxes = []
-    poses = []
     centroids = []
 
     translations = []
@@ -298,7 +294,6 @@ def loadjson(path, objectsofinterest, img):
         boxToAdd.append(float(box['top_left'][1]))
         boxToAdd.append(float(box["bottom_right"][0]))
         boxToAdd.append(float(box['bottom_right'][1]))
-        boxes.append(boxToAdd)
 
         boxpoint = [(boxToAdd[0],boxToAdd[1]),(boxToAdd[0],boxToAdd[3]),
                     (boxToAdd[2],boxToAdd[1]),(boxToAdd[2],boxToAdd[3])]
@@ -335,7 +330,6 @@ def loadjson(path, objectsofinterest, img):
         "centroids":centroids,
         "points":points,
         "keypoints_2d":points_keypoints_2d,
-        "keypoints_3d":points_keypoints_3d,
         }
 
 def loadimages(root):
@@ -436,10 +430,10 @@ class MultipleVertexJson(data.Dataset):
         Otherwise, during training this function returns the 
         belief maps and affinity fields and image as tensors.  
         """
+
         path, name, txt = self.imgs[index]
         img = self.loader(path)
 
-        img_size = img.size
         img_size = (400,400)
 
         loader = loadjson
@@ -469,23 +463,7 @@ class MultipleVertexJson(data.Dataset):
             translations = torch.zeros(1,3).float()
             rotations = torch.zeros(1,4).float()
 
-        # Camera intrinsics
-        path_cam = path.replace(name,'_camera_settings.json')
-        with open(path_cam) as data_file:    
-            data = json.load(data_file)
-        # Assumes one camera
-        cam = data['camera_settings'][0]['intrinsic_settings']
-
-        matrix_camera = np.zeros((3,3))
-        matrix_camera[0,0] = cam['fx']
-        matrix_camera[1,1] = cam['fy']
-        matrix_camera[0,2] = cam['cx']
-        matrix_camera[1,2] = cam['cy']
-        matrix_camera[2,2] = 1
-
-
         img_original = img.copy()        
-
         
         def Reproject(points,tm, rm):
             """
@@ -493,14 +471,9 @@ class MultipleVertexJson(data.Dataset):
             """
             proj_cuboid = np.array(points)
 
-            rmat = np.identity(3)
-            rmat[0:2] = rm
-            tmat = np.identity(3)
-            tmat[0:2] = tm
-
             new_cuboid = np.matmul(
-                rmat, np.vstack((proj_cuboid.T, np.ones(len(points)))))
-            new_cuboid = np.matmul(tmat, new_cuboid)
+                rm, np.vstack((proj_cuboid.T, np.ones(len(points)))))
+            new_cuboid = np.matmul(tm, new_cuboid)
             new_cuboid = new_cuboid[0:2].T
 
             return new_cuboid
@@ -510,9 +483,11 @@ class MultipleVertexJson(data.Dataset):
         dy = round(np.random.normal(0, 2) * float(self.random_translation[1]))
         angle = round(np.random.normal(0, 1) * float(self.random_rotation))
 
-        tm = np.float32([[1, 0, dx], [0, 1, dy]])
+        tm = np.float32([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
         rm = cv2.getRotationMatrix2D(
             (img.size[0]/2, img.size[1]/2), angle, 1)
+        rm = np.vstack((rm, [0, 0, 1]))
+        full_transform = np.dot(tm, rm)
 
         for i_objects in range(len(pointsBelief)):
             points = pointsBelief[i_objects]
@@ -527,8 +502,7 @@ class MultipleVertexJson(data.Dataset):
             points_keypoints[i_objects] = new_cuboid.tolist()
             points_keypoints[i_objects] = list(map(tuple, points_keypoints[i_objects]))
                 
-        image_r = cv2.warpAffine(np.array(img), rm, img.size)
-        result = cv2.warpAffine(image_r, tm, img.size)
+        result = cv2.warpAffine(np.array(img), full_transform[:2], img.size)
         img = Image.fromarray(result)
 
         # Note:  All point coordinates are in the image space, e.g., pixel value.
@@ -554,16 +528,10 @@ class MultipleVertexJson(data.Dataset):
                     xy = [point[0]-pointRadius, point[1]-pointRadius, point[0]+pointRadius, point[1]+pointRadius]
                     draw.ellipse(xy, fill=pointColor, outline=pointColor)
 
-            def DrawCube(points, which_color = 0, color = None):
+            def DrawCube(points, color = None):
                 '''Draw cube with a thick solid line across the front top edge.'''
                 lineWidthForDrawing = 2
-                lineColor1 = (255, 215, 0)  # yellow-ish
-                lineColor2 = (12, 115, 170)  # blue-ish
-                lineColor3 = (45, 195, 35)  # green-ish
-                if which_color == 3:
-                    lineColor = lineColor3
-                else:
-                    lineColor = lineColor1
+                lineColor = (255, 215, 0)  # yellow-ish
 
                 if not color is None:
                     lineColor = color        
@@ -603,7 +571,6 @@ class MultipleVertexJson(data.Dataset):
                 "translations":translations,
                 "rot_quaternions":rotations,
                 'pointsBelief':np.array(points_all[0]),
-                'matrix_camera':matrix_camera,
                 'img_original': np.array(img_original),
                 'file_name':name,
             }
@@ -616,7 +583,6 @@ class MultipleVertexJson(data.Dataset):
             sigma = self.sigma)
 
         # Create the image maps for belief
-        transform = transforms.Compose([transforms.Resize(min(img_size))])
         totensor = transforms.Compose([transforms.ToTensor()])
 
         for j in range(len(beliefsImg)):
@@ -638,19 +604,18 @@ class MultipleVertexJson(data.Dataset):
         affinities = GenerateMapAffinity(img,8,pointsBelief,objects_centroid,scale)
         img = self.transform(img)
 
-        # Transform the images for training input
+        # Crop a region to train on
         w_crop = np.random.randint(0, img.size[0] - img_size[0]+1)
         h_crop = np.random.randint(0, img.size[1] - img_size[1]+1)
-        transform = transforms.Compose([transforms.Resize(min(img_size))])
-        totensor = transforms.Compose([transforms.ToTensor()])
 
-        if not self.normal is None:
+        if self.normal is None:
+            normalize = transforms.Compose([AddNoise(0.0001)])
+        else:
             normalize = transforms.Compose([transforms.Normalize
                 ((self.normal[0],self.normal[0],self.normal[0]),
                  (self.normal[1],self.normal[1],self.normal[1])),
                 AddNoise(self.noise)])
-        else:
-            normalize = transforms.Compose([AddNoise(0.0001)])
+            
         
         img = crop(img,h_crop,w_crop,img_size[1],img_size[0])
         img = totensor(img)
@@ -668,6 +633,7 @@ class MultipleVertexJson(data.Dataset):
 
         if affinities.size()[2] == 49 and not self.test:
             affinities = torch.cat([affinities,torch.zeros(16,50,1)],dim=2)
+
 
         return {
             'img':img,    
@@ -724,8 +690,7 @@ def GenerateMapAffinity(img,nb_vertex,pointsInterest,objects_centroid,scale):
 
     # Apply the downscale right now, so the vectors are correct. 
     img_affinity = Image.new(img.mode, (int(img.size[0]/scale),int(img.size[1]/scale)), "black")
-    # Create the empty tensors
-    totensor = transforms.Compose([transforms.ToTensor()])
+
 
     affinities = []
     for i_points in range(nb_vertex):
@@ -735,8 +700,7 @@ def GenerateMapAffinity(img,nb_vertex,pointsInterest,objects_centroid,scale):
         pointsImage = pointsInterest[i_pointsImage]
         center = objects_centroid[i_pointsImage]
         for i_points in range(nb_vertex):
-            point = pointsImage[i_points]
-            affinity_pair, img_affinity = getAfinityCenter(int(img.size[0]/scale),
+            affinity_pair, img_affinity = getAffinityCenter(int(img.size[0]/scale),
                 int(img.size[1]/scale),
                 tuple((np.array(pointsImage[i_points])/scale).tolist()),
                 tuple((np.array(center)/scale).tolist()), 
@@ -762,7 +726,7 @@ def GenerateMapAffinity(img,nb_vertex,pointsInterest,objects_centroid,scale):
 
     return affinities
 
-def getAfinityCenter(width, height, point, center, radius=7, img_affinity=None):
+def getAffinityCenter(width, height, point, center, radius=7, img_affinity=None):
     """
     Function to create the affinity maps, 
     e.g., vector maps pointing toward the object center. 
@@ -781,7 +745,6 @@ def getAfinityCenter(width, height, point, center, radius=7, img_affinity=None):
 
     # Create the canvas for the afinity output
     imgAffinity = Image.new("RGB", (width,height), "black")
-    totensor = transforms.Compose([transforms.ToTensor()])
     
     draw = ImageDraw.Draw(imgAffinity)    
     r1 = radius
@@ -830,7 +793,6 @@ def CreateBeliefMap(img,pointsBelief,nbpoints,sigma=16):
     sigma = int(sigma)
     for numb_point in range(nbpoints):    
         array = np.zeros(img.size)
-        out = np.zeros(img.size)
 
         for point in pointsBelief:
             p = point[numb_point]
@@ -841,7 +803,6 @@ def CreateBeliefMap(img,pointsBelief,nbpoints,sigma=16):
                         array[i,j] = np.exp(-(((i - p[0])**2 + (j - p[1])**2)/(2*(sigma**2))))
 
         stack = np.stack([array,array,array],axis=0).transpose(2,1,0)
-        imgBelief = Image.new(img.mode, img.size, "black")
         beliefsImg.append(Image.fromarray((stack*255).astype('uint8')))
     return beliefsImg
 
@@ -907,11 +868,8 @@ class AddNoise(object):
         t = torch.clamp(t,-1,1) #this is expansive
         return t
 
-
-irange = range
-
 def make_grid(tensor, nrow=8, padding=2,
-              normalize=False, range=None, scale_each=False, pad_value=0):
+              normalize=False, img_range=None, scale_each=False, pad_value=0):
     """
     Make a grid of images.
     
@@ -921,9 +879,9 @@ def make_grid(tensor, nrow=8, padding=2,
         nrow (int, optional): Number of images displayed in each row of the grid.
             The Final grid size is (B / nrow, nrow). Default is 8.
         padding (int, optional): amount of padding. Default is 2.
-        normalize (bool, optional): If True, shift the image to the range (0, 1),
+        normalize (bool, optional): If True, shift the image to the img_range (0, 1),
             by subtracting the minimum and dividing by the maximum pixel value.
-        range (tuple, optional): tuple (min, max) where min and max are numbers,
+        img_range (tuple, optional): tuple (min, max) where min and max are numbers,
             then these numbers are used to normalize the image. By default, min and max
             are computed from the tensor.
         scale_each (bool, optional): If True, scale each image in the batch of
@@ -950,25 +908,25 @@ def make_grid(tensor, nrow=8, padding=2,
 
     if normalize == True:
         tensor = tensor.clone()  # avoid modifying tensor in-place
-        if range is not None:
-            assert isinstance(range, tuple), \
-                "range has to be a tuple (min, max) if specified. min and max are numbers"
+        if img_range is not None:
+            assert isinstance(img_range, tuple), \
+                "img_range has to be a tuple (min, max) if specified. min and max are numbers"
 
         def norm_ip(img, min, max):
             img.clamp_(min=min, max=max)
             img.add_(-min).div_(max - min + 1e-5)
 
-        def norm_range(t, range):
-            if range is not None:
-                norm_ip(t, range[0], range[1])
+        def norm_range(t, img_range):
+            if img_range is not None:
+                norm_ip(t, img_range[0], img_range[1])
             else:
                 norm_ip(t, float(t.min()), float(t.max()))
 
         if scale_each == True:
             for t in tensor:  # loop over mini-batch dimension
-                norm_range(t, range)
+                norm_range(t, img_range)
         else:
-            norm_range(tensor, range)
+            norm_range(tensor, img_range)
 
     if tensor.size(0) == 1:
         return tensor.squeeze()
@@ -980,8 +938,8 @@ def make_grid(tensor, nrow=8, padding=2,
     height, width = int(tensor.size(2) + padding), int(tensor.size(3) + padding)
     grid = tensor.new(3, height * ymaps + padding, width * xmaps + padding).fill_(pad_value)
     k = 0
-    for y in irange(ymaps):
-        for x in irange(xmaps):
+    for y in range(ymaps):
+        for x in range(xmaps):
             if k >= nmaps:
                 break
             grid.narrow(1, y * height + padding, height - padding)\
@@ -1000,58 +958,15 @@ def save_image(tensor, filename, nrow=4, padding=2,mean=None, std=None):
     
     tensor = tensor.cpu()
     grid = make_grid(tensor, nrow=nrow, padding=10,pad_value=1)
-    if not mean is None:
-        ndarr = grid.mul(std).add(mean).mul(255).byte().transpose(0,2).transpose(0,1).numpy()
-    else:      
+    if mean is None:
         ndarr = grid.mul(0.5).add(0.5).mul(255).byte().transpose(0,2).transpose(0,1).numpy()
+    else:
+        ndarr = grid.mul(std).add(mean).mul(255).byte().transpose(0,2).transpose(0,1).numpy()
+      
+        
     im = Image.fromarray(ndarr)
     im.save(filename)
 
-def DrawLine(point1, point2, lineColor, lineWidth,draw):
-    if not point1 is None and not point2 is None:
-        draw.line([point1,point2],fill=lineColor,width=lineWidth)
-
-def DrawDot(point, pointColor, pointRadius, draw):
-    if not point is None:
-        xy = [point[0]-pointRadius, point[1]-pointRadius, point[0]+pointRadius, point[1]+pointRadius]
-        draw.ellipse(xy, fill=pointColor, outline=pointColor)
-
-def DrawCube(points, which_color = 0, color = None, draw = None):
-    '''Draw cube with a thick solid line across the front top edge.'''
-    lineWidthForDrawing = 2
-    lineWidthThick = 8
-    lineColor1 = (255, 215, 0)  # yellow-ish
-    lineColor2 = (12, 115, 170)  # blue-ish
-    lineColor3 = (45, 195, 35)  # green-ish
-    if which_color == 3:
-        lineColor = lineColor3
-    else:
-        lineColor = lineColor1
-
-    if not color is None:
-        lineColor = color        
-
-    # draw front
-    DrawLine(points[0], points[1], lineColor, lineWidthThick, draw)
-    DrawLine(points[1], points[2], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[3], points[2], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[3], points[0], lineColor, lineWidthForDrawing, draw)
-    
-    # draw back
-    DrawLine(points[4], points[5], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[6], points[5], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[6], points[7], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[4], points[7], lineColor, lineWidthForDrawing, draw)
-    
-    # draw sides
-    DrawLine(points[0], points[4], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[7], points[3], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[5], points[1], lineColor, lineWidthForDrawing, draw)
-    DrawLine(points[2], points[6], lineColor, lineWidthForDrawing, draw)
-
-    # draw dots
-    DrawDot(points[0], pointColor=lineColor, pointRadius = 4,draw = draw)
-    DrawDot(points[1], pointColor=lineColor, pointRadius = 4,draw = draw)
 
 
 
@@ -1169,13 +1084,6 @@ parser.add_argument('--datasize',
     default=None, 
     help='randomly sample that number of entries in the dataset folder') 
 
-parser.add_argument('-n', '--nodes', default=1,
-                        type=int, metavar='N')
-parser.add_argument('-g', '--gpus', default=1, type=int,
-                    help='number of gpus per node')
-parser.add_argument('-nr', '--nr', default=0, type=int,
-                    help='ranking within the nodes')
-
 # Read the config but do not overwrite the args written 
 args, remaining_argv = conf_parser.parse_known_args()
 defaults = { "option":"default" }
@@ -1194,6 +1102,8 @@ if opt.pretrained in ['false', 'False']:
 
 if not "/" in opt.outf:
     opt.outf = "/mnt/Data/DOPE_trainings/train_{}".format(opt.outf)
+    timestr = time.strftime("_%m_%d_%Y")
+    opt.outf = opt.outf + timestr
 
 try:
     os.makedirs(opt.outf)
@@ -1219,24 +1129,23 @@ torch.manual_seed(opt.manualseed)
 torch.cuda.manual_seed_all(opt.manualseed)
 
 # save 
-if not opt.save:
+if opt.save:
+    contrast = 0.00001
+    brightness = 0.00001
+    normal_imgs = None
+    transform = transforms.Compose([
+                           transforms.Resize(opt.imagesize),
+                           transforms.ToTensor()])
+else:
     contrast = 0.2
     brightness = 0.2
-    noise = 0.1
     normal_imgs = [0.59,0.25]
     transform = transforms.Compose([
                                AddRandomContrast(contrast),
                                AddRandomBrightness(brightness),
                                transforms.Scale(opt.imagesize),
                                ])
-else:
-    contrast = 0.00001
-    brightness = 0.00001
-    noise = 0.00001
-    normal_imgs = None
-    transform = transforms.Compose([
-                           transforms.Resize(opt.imagesize),
-                           transforms.ToTensor()])
+    
 
 
 #load the dataset using the loader in utils_pose
@@ -1264,15 +1173,15 @@ if not opt.data == "":
         pin_memory = True
         )
 
+
+for i in range(2):
+    images = iter(trainingdata).next()
+    if normal_imgs is None:
+        normal_imgs = [0,1]
+    save_image(images['img'],'{}/train_{}.png'.format( opt.outf,str(i).zfill(5)),mean=normal_imgs[0],std=normal_imgs[1])
+    print ("Saving batch %d" % i) 
+
 if opt.save:
-    for i in range(2):
-        images = iter(trainingdata).next()
-        if normal_imgs is None:
-            normal_imgs = [0,1]
-        save_image(images['img'],'{}/train_{}.png'.format( opt.outf,str(i).zfill(5)),mean=normal_imgs[0],std=normal_imgs[1])
-
-        print (i)        
-
     print ('things are saved in {}'.format(opt.outf))
     quit()
 
