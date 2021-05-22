@@ -1,3 +1,4 @@
+
 import sys
 sys.path.append(".")
 
@@ -6,75 +7,9 @@ from src.dope.inference.cuboid import Cuboid3d
 from src.dope.inference.cuboid_pnp_solver import CuboidPNPSolver
 from src.dope.inference.detector import ModelData, ObjectDetector
 import numpy as np
-import yaml
-from PIL import Image, ImageDraw
-import math
-
-class Draw(object):
-    """Drawing helper class to visualize the neural network output"""
-
-    def __init__(self, im):
-        """
-        :param im: The image to draw in.
-        """
-        self.draw = ImageDraw.Draw(im)
-
-    def draw_line(self, point1, point2, line_color, line_width=2):
-        """Draws line on image"""
-        if point1 is not None and point2 is not None:
-            self.draw.line([point1, point2], fill=line_color, width=line_width)
-
-    def draw_dot(self, point, point_color, point_radius):
-        """Draws dot (filled circle) on image"""
-        if point is not None:
-            xy = [
-                point[0] - point_radius,
-                point[1] - point_radius,
-                point[0] + point_radius,
-                point[1] + point_radius
-            ]
-            self.draw.ellipse(xy,
-                              fill=point_color,
-                              outline=point_color
-                              )
-
-    def draw_cube(self, points, color=(255, 0, 0)):
-        """
-        Draws cube with a thick solid line across
-        the front top edge and an X on the top face.
-        """
-
-        # draw front
-        self.draw_line(points[0], points[1], color)
-        self.draw_line(points[1], points[2], color)
-        self.draw_line(points[3], points[2], color)
-        self.draw_line(points[3], points[0], color)
-
-        # draw back
-        self.draw_line(points[4], points[5], color)
-        self.draw_line(points[6], points[5], color)
-        self.draw_line(points[6], points[7], color)
-        self.draw_line(points[4], points[7], color)
-
-        # draw sides
-        self.draw_line(points[0], points[4], color)
-        self.draw_line(points[7], points[3], color)
-        self.draw_line(points[5], points[1], color)
-        self.draw_line(points[2], points[6], color)
-
-        # draw dots
-        self.draw_dot(points[0], point_color=color, point_radius=4)
-        self.draw_dot(points[1], point_color=color, point_radius=4)
-
-        # draw x on the top
-        self.draw_line(points[0], points[5], color)
-        self.draw_line(points[1], points[4], color)
-    
-
 
 
 def main():
-
     models = {}
     pnp_solvers = {}
 
@@ -85,20 +20,16 @@ def main():
     config_detect.threshold = 0.5
     config_detect.softmax = 1000
     config_detect.thresh_angle = 0.5
-    config_detect.thresh_map = 0.001
+    config_detect.thresh_map = 0.01
     config_detect.sigma = 3
-    config_detect.thresh_points = 0.01
+    config_detect.thresh_points = 0.1
 
     weights = {
         # "cracker":"package://dope/weights/cracker_60.pth",
         # "gelatin":"package://dope/weights/gelatin_60.pth",
         # "meat":"package://dope/weights/meat_20.pth",
         # "mustard":"package://dope/weights/mustard_60.pth",
-        
-        #"cutie":"/mnt/Data/DOPE_trainings/train_cutie/net_cutie_57.pth",
         "cutie":"/mnt/Data/DOPE_trainings/train_cutie_04_18_2021/net_cutie_100.pth",
-        #"cutie":"/home/uwrt/backup_weights/net_cutie_50_session1.pth",
-
         #"sugar":"package://dope/weights/sugar_60.pth",
         # "bleach":"package://dope/weights/bleach_28_dr.pth"
         
@@ -142,7 +73,7 @@ def main():
         "soup": [6.7659378051757813,10.185500144958496,6.771425724029541],
         "sugar": [9.267730712890625,17.625339508056641,4.5134143829345703],
         "bleach": [10.267730712890625,26.625339508056641,7.5134143829345703],
-        "cutie": [62.2, 124.5, 1.2],
+        "cutie": [100, 200, 1],
 
         # new objects
         "AlphabetSoup" : [ 8.3555002212524414, 7.1121001243591309, 6.6055998802185059 ], 
@@ -175,26 +106,10 @@ def main():
         "PeasAndCarrots" : [ 5.8512001037597656, 7.0636000633239746, 6.5918002128601074 ] 
     }
 
-    draw_colors = {
-        "cracker": (13, 255, 128),  # green
-        "gelatin": (255, 255, 255),  # while
-        "meat": (0, 104, 255),  # blue
-        "mustard": (217,12, 232),  # magenta
-        "soup": (255, 101, 0),  # orange
-        "sugar": (232, 222, 12),  # yellow
-        "cutie": (232, 222, 12),  # yellow
-    }
-
-    camera_matrix = np.array([[304,    0,         256.0],
-                            [  0,      304,       256.0],
-                            [  0,      0.,        1.        ]])
-    dist_coeffs = np.zeros((4, 1))
-
     # For each object to detect, load network model, create PNP solver, and start ROS publishers
     for model, weights_url in weights.items():
         models[model] = \
             ModelData(
-
                 model,
                 weights_url
             )
@@ -207,101 +122,51 @@ def main():
                 model,
                 cuboid3d=Cuboid3d(dimensions[model])
             )
-       
+
+        camera_matrix = np.array([[618,    0,         256.0],
+                                [  0,      618,       256.0],
+                                [  0,      0.,        1.        ]])
+        dist_coeffs = np.array([[0.],
+                        [0.],
+                        [0.],
+                        [0.]])
+
+        
 
     # read the image(jpg) on which the network should be tested. 
     # example: 
     # C:\\Users\\m\\Desktop\\000044.jpg
-    path_to_video = "/mnt/Data/Test Videos/cutie_trim.mp4"
-    out_video = "test.avi"
-    cap = cv2.VideoCapture(path_to_video)
-
-    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)   # float `width`
-    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
-    scaling_factor = float(400) / height
-    if scaling_factor < 1.0:
-        camera_matrix *= scaling_factor
     
-    for m in models:
-        # Resize camera matrix
+
+    for i in range(20):
+        pathToImg = "/mnt/Data/visii_data/cutie/cutie_training/cutie%d.png" % i
+        print("path to the image is: {}".format(pathToImg))
+        img = cv2.imread(pathToImg)
+        if img is None:
+            continue
+        cv2.imshow('img', img)
+        cv2.waitKey(1)
+
+        height, width, _ = img.shape
+        scaling_factor = float(400) / height
+        if scaling_factor < 1.0:
+            img = cv2.resize(img, (int(scaling_factor * width), int(scaling_factor * height)))
+            camera_matrix *= scaling_factor
+        
         pnp_solvers[model].set_camera_intrinsic_matrix(camera_matrix)
         pnp_solvers[model].set_dist_coeffs(dist_coeffs)
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter(out_video, fourcc, fps, (int(scaling_factor * width), int(scaling_factor * height)))
-
-    i = 1
-    while(cap.isOpened()):
-        ret, frame = cap.read()
-        # i += 1
-        # try:
-        #     frame = cv2.imread("/mnt/Data/visii_data/cutie/cutie_training/cutie%d.png" % i)
-        # except:
-        #     continue
-       
-
-        # if frame is None:
-        #     continue
-
-        # import time
-        # time.sleep(1)
-
-        # height, width = frame.shape[:2]
-        # scaling_factor = float(400) / height
-        
-
-        if not ret:
-            break 
-        # modify the frame (color, blur, noise) to prevent cutie from being identified
-	
-        #frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)			
-        #frame=[[[255%j,255%j,j] for j in i] for i in frame]				
-        #dt = np.dtype('f8')			
-        #frame=np.array(frame,dtype=dt)	
-
-        #height, width, layers = frame.shape	
-        #height = math.floor(height/1.5)
-        #width = math.floor(width/1)
-        #frame = cv2.resize(frame, (height, width))				
-
-        #frame = frame + np.random.normal(0.0, 1.0, frame.shape)
-        #frame = np.clip(frame, 0, 255)   
-
-        # frame = frame * np.array([1,1,1.5])
-        frame = np.clip(frame, 0, 255).astype(np.uint8)
-
-        if scaling_factor < 1.0:
-            frame = cv2.resize(frame, (int(scaling_factor * width), int(scaling_factor * height)))
-
-        frame_copy = frame.copy()
-        im = Image.fromarray(frame_copy)
-        draw = Draw(im)
         
         for m in models:
-            
             # try to detect object
-            results = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], frame, config_detect)
+            results, im_belief = ObjectDetector.detect_object_in_image(models[m].net, pnp_solvers[m], img, config_detect, grid_belief_debug=True, norm_belief=True, run_sampling=True)
 
-            
-            for i_r, result in enumerate(results):
-                if None not in result['projected_points']:
-                    points2d = []
-                    for pair in result['projected_points']:
-                        points2d.append(tuple(pair))
-                    draw.draw_cube(points2d, draw_colors[m])
+            print("objects found: {}".format(results))
+            cv_imageBelief = np.array(im_belief)
+            imageToShow = cv2.resize(cv_imageBelief, dsize=(800, 800))
+            cv2.imshow('beliefMaps', imageToShow)
+            cv2.waitKey(0)      
 
-            annotated_frame = np.array(im)
-            cv2.imshow('frame', annotated_frame)
-            out.write(annotated_frame)
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break    
-
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
+    print("end")
 
 
 if __name__ == '__main__':
