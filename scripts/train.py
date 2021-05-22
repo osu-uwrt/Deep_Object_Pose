@@ -381,6 +381,7 @@ class MultipleVertexJson(data.Dataset):
             sigma = 16,
             random_translation = (25.0,25.0),
             random_rotation = 15.0,
+            random_stretch = 0.1,
             ):
         ###################
         self.objectsofinterest = objectsofinterest
@@ -399,6 +400,7 @@ class MultipleVertexJson(data.Dataset):
         self.sigma = sigma
         self.random_translation = random_translation
         self.random_rotation = random_rotation
+        self.random_stretch = random_stretch
 
         def load_data(path):
             '''Recursively load the data.  This is useful to load all of the FAT dataset.'''
@@ -465,44 +467,49 @@ class MultipleVertexJson(data.Dataset):
 
         img_original = img.copy()        
         
-        def Reproject(points,tm, rm):
+        def Reproject(points, transform):
             """
             Reprojection of points when rotating the image
             """
             proj_cuboid = np.array(points)
 
-            new_cuboid = np.matmul(
-                rm, np.vstack((proj_cuboid.T, np.ones(len(points)))))
-            new_cuboid = np.matmul(tm, new_cuboid)
+            new_cuboid = np.matmul(transform, 
+                            np.vstack((proj_cuboid.T, np.ones(len(points)))))
             new_cuboid = new_cuboid[0:2].T
 
             return new_cuboid
 
         # Random image manipulation, rotation and translation with zero padding
-        dx = round(np.random.normal(0, 2) * float(self.random_translation[0]))
-        dy = round(np.random.normal(0, 2) * float(self.random_translation[1]))
-        angle = round(np.random.normal(0, 1) * float(self.random_rotation))
+        dx = np.random.normal(0, 2) * float(self.random_translation[0])
+        dy = np.random.normal(0, 2) * float(self.random_translation[1])
+        angle = np.random.normal(0, 1) * float(self.random_rotation)
+        sx = np.random.uniform(1, 1 + self.random_stretch)
+        sy = np.random.uniform(1, 1 + self.random_stretch)
 
         tm = np.float32([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
         rm = cv2.getRotationMatrix2D(
             (img.size[0]/2, img.size[1]/2), angle, 1)
         rm = np.vstack((rm, [0, 0, 1]))
-        full_transform = np.dot(tm, rm)
+        sm = np.array([[sx, 0,  0],
+                       [0,  sy, 0],
+                       [0,  0,  1]])
+        full_transform = np.dot(tm, rm, sm)
 
         for i_objects in range(len(pointsBelief)):
             points = pointsBelief[i_objects]
-            new_cuboid = Reproject(points, tm, rm)
+            new_cuboid = Reproject(points, full_transform)
             pointsBelief[i_objects] = new_cuboid.tolist()
             objects_centroid[i_objects] = tuple(new_cuboid.tolist()[-1])
             pointsBelief[i_objects] = list(map(tuple, pointsBelief[i_objects]))
 
         for i_objects in range(len(points_keypoints)):
             points = points_keypoints[i_objects]
-            new_cuboid = Reproject(points, tm, rm)
+            new_cuboid = Reproject(points, full_transform)
             points_keypoints[i_objects] = new_cuboid.tolist()
             points_keypoints[i_objects] = list(map(tuple, points_keypoints[i_objects]))
                 
-        result = cv2.warpAffine(np.array(img), full_transform[:2], img.size)
+        avg_color = np.mean(img, axis=(0, 1))
+        result = cv2.warpAffine(np.array(img), full_transform[:2], img.size, borderValue=avg_color)
         img = Image.fromarray(result)
 
         # Note:  All point coordinates are in the image space, e.g., pixel value.
@@ -820,34 +827,7 @@ def crop(img, i, j, h, w):
     Returns:
         PIL.Image: Cropped image.
     """
-    return img.crop((j, i, j + w, i + h))
-    
-class AddRandomContrast(object):
-    """
-    Apply some random contrast from PIL
-    """
-    
-    def __init__(self,sigma=0.1):
-        self.sigma = sigma
-
-    def __call__(self, im):
-        contrast = ImageEnhance.Contrast(im)
-        im = contrast.enhance( np.random.normal(1,self.sigma) )        
-        return im
-
-
-class AddRandomBrightness(object):
-    """
-    Apply some random brightness from PIL
-    """
-
-    def __init__(self,sigma=0.1):
-        self.sigma = sigma
-
-    def __call__(self, im):
-        bright = ImageEnhance.Brightness(im)
-        im = bright.enhance( np.random.normal(1,self.sigma) )
-        return im        
+    return img.crop((j, i, j + w, i + h))   
 
 class AddNoise(object):
     """
@@ -860,6 +840,9 @@ class AddNoise(object):
         self.std = std
 
     def __call__(self, tensor):
+        if self.std == 0:
+            return torch.clamp(tensor,-1,1)
+
         # TODO: make efficient
         # t = torch.FloatTensor(tensor.size()).uniform_(self.min,self.max)
         t = torch.FloatTensor(tensor.size()).normal_(0,self.std)
@@ -1012,7 +995,7 @@ parser.add_argument('--batchsize',
 
 parser.add_argument('--subbatchsize', 
     type=int, 
-    default=24, 
+    default=20, 
     help='input batch size')
 
 parser.add_argument('--imagesize', 
@@ -1027,7 +1010,7 @@ parser.add_argument('--lr',
 
 parser.add_argument('--noise', 
     type=float, 
-    default=2.0, 
+    default=0.7, 
     help='gaussian noise added to the image')
 
 parser.add_argument('--net', 
@@ -1044,7 +1027,7 @@ parser.add_argument('--manualseed',
 
 parser.add_argument('--epochs', 
     type=int, 
-    default=60,
+    default=120,
     help="number of epochs to train")
 
 parser.add_argument('--loginterval', 
@@ -1136,15 +1119,15 @@ if opt.save:
     transform = transforms.Compose([
                            transforms.Resize(opt.imagesize),
                            transforms.ToTensor()])
+    test_transform = transform
 else:
-    contrast = 0.2
-    brightness = 0.2
-    normal_imgs = [0.59,0.25]
+    normal_imgs = [0.45,0.25]
     transform = transforms.Compose([
-                               AddRandomContrast(contrast),
-                               AddRandomBrightness(brightness),
+                               transforms.ColorJitter(brightness=0.2, contrast=0.3, saturation=0.2, hue=0.1),
+                               transforms.GaussianBlur(25, (0.1, 3)),
                                transforms.Scale(opt.imagesize),
                                ])
+    test_transform = transforms.Scale(opt.imagesize)
     
 
 
@@ -1164,26 +1147,30 @@ if not opt.data == "":
         target_transform = transforms.Compose([
                                transforms.Scale(opt.imagesize//8),
             ]),
+        random_rotation=5,
+        random_translation=(10.0, 10.0)
         )
 
     trainingdata = torch.utils.data.DataLoader(train_dataset,
         batch_size = opt.subbatchsize, 
         shuffle = True,
         num_workers = opt.workers, 
-        pin_memory = True
+        pin_memory = True,
+        drop_last=True
         )
 
 
-for i in range(2):
-    images = iter(trainingdata).next()
-    if normal_imgs is None:
-        normal_imgs = [0,1]
-    save_image(images['img'],'{}/train_{}.png'.format( opt.outf,str(i).zfill(5)),mean=normal_imgs[0],std=normal_imgs[1])
-    print ("Saving batch %d" % i) 
+    for i in range(2):
+        images = iter(trainingdata).next()
+        if normal_imgs is None:
+            normal_imgs = [0,1]
+        save_image(images['img'],'{}/train_{}.png'.format( opt.outf,str(i).zfill(5)),mean=normal_imgs[0],std=normal_imgs[1])
+        print ("Saving batch %d" % i) 
 
-if opt.save:
-    print ('things are saved in {}'.format(opt.outf))
-    quit()
+    if opt.save:
+        print ('things are saved in {}'.format(opt.outf))
+        quit()
+
 
 testingdata = None
 if not opt.datatest == "": 
@@ -1191,15 +1178,17 @@ if not opt.datatest == "":
             root = opt.datatest,
             objectsofinterest=opt.object,
             keep_orientation = True,
-            noise = opt.noise,
+            noise = 0,
             sigma = opt.sigma,
             data_size = opt.datasize,
             save = opt.save,
-            transform = transform,
+            transform = test_transform,
             normal = normal_imgs,
             target_transform = transforms.Compose([
                                    transforms.Scale(opt.imagesize//8),
                 ]),
+            random_rotation=0,
+            random_translation=(0.0, 0.0)
             )
 
     testingdata = torch.utils.data.DataLoader(
@@ -1207,7 +1196,9 @@ if not opt.datatest == "":
         batch_size = opt.subbatchsize // 2, 
         shuffle = True,
         num_workers = opt.workers, 
-        pin_memory = True)
+        pin_memory = True,
+        drop_last=True)
+
 
 if not trainingdata is None:
     print('training data: {} batches'.format(len(trainingdata)))
@@ -1302,7 +1293,7 @@ def _runnetwork(epoch, loader, train=True, scaler=None, pbar=None):
         optimizer.zero_grad()
 
 scaler = amp.GradScaler()
-
+torch.backends.cudnn.benchmark = True
 pbar = tqdm(range(1, opt.epochs + 1))
 
 for epoch in pbar:

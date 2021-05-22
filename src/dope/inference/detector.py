@@ -26,7 +26,7 @@ transform = transforms.Compose([
     # transforms.Scale(IMAGE_SIZE),
     # transforms.CenterCrop((imagesize,imagesize)),
     transforms.ToTensor(),
-    transforms.Normalize((0.59, 0.59, 0.59), (0.25, 0.25, 0.25)),
+    transforms.Normalize((0.45, 0.45, 0.45), (0.25, 0.25, 0.25)),
     ])
 
 
